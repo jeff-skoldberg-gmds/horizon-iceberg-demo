@@ -53,6 +53,94 @@ Engine → catalog edges carry **no Snowflake compute**: dlt/pyiceberg and dbt F
 
 ---
 
+## Quickstart
+
+> Prereqs: `terraform`, the `snow` CLI (a connection, referenced below as `my-connection`), `uv`, an AWS profile (referenced as `my-aws-profile`, region `us-east-2`), and `ACCOUNTADMIN` on your Snowflake account. Set your org/account identifier (org `MYORG`, account `MYACCT` → host `myorg-myacct.snowflakecomputing.com`) in `tf/snowflake/terraform.tfvars` and `.env`.
+
+### 1. Configure your environment (`.env`)
+
+Create the gitignored `.env` at the repo root first — later steps source it and append the PATs into it. Fill in your org/account host; leave the PAT values as placeholders for now (you'll capture the real tokens in step 4):
+
+```dotenv
+HORIZON_CATALOG_URI=https://myorg-myacct.snowflakecomputing.com/polaris/api/catalog
+HORIZON_READ_WAREHOUSE=ICE_RAW
+HORIZON_WRITE_WAREHOUSE=ICE_TRANSFORMED
+HORIZON_LOAD_PAT=<HORIZON_LOAD_PAT>
+HORIZON_PAT=<HORIZON_PAT>
+```
+
+### 2. Provision AWS, then Snowflake
+
+```bash
+cd <repo>/tf/aws
+terraform init && terraform apply
+
+cd <repo>/tf/snowflake
+terraform init && terraform apply
+```
+
+> Trust-policy note: `tf/aws` first applies with an account-root placeholder principal; after the external volume exists, set `snowflake_iam_user_arn` + `snowflake_external_id` from `DESC EXTERNAL VOLUME HORIZON_EXT_VOL` in `tf/aws/terraform.tfvars` and re-apply to lock the IAM trust down to Snowflake's real principal.
+
+### 3. Create the access layer (roles, grants, network policy, service user)
+
+```bash
+cd <repo>
+snow sql -f sql/horizon_access.sql --role ACCOUNTADMIN -c my-connection
+```
+
+### 4. Issue the two role-restricted PATs
+
+Each token secret is returned **once** — capture it straight into the `.env` you created in step 1, replacing the `<HORIZON_LOAD_PAT>` / `<HORIZON_PAT>` placeholders (never echo it to a log):
+
+```bash
+snow sql -q "ALTER USER HORIZON_SVC ADD PAT HORIZON_LOAD_PAT DAYS_TO_EXPIRY=7 \
+  ROLE_RESTRICTION='LOADER'      COMMENT='dlt external Iceberg REST loader'" \
+  --role ACCOUNTADMIN -c my-connection --format json
+
+snow sql -q "ALTER USER HORIZON_SVC ADD PAT HORIZON_PAT DAYS_TO_EXPIRY=7 \
+  ROLE_RESTRICTION='TRANSFORMER' COMMENT='dbt-duckdb external Iceberg REST'" \
+  --role ACCOUNTADMIN -c my-connection --format json
+```
+
+(See `sql/issue_pat.sql` for the canonical commands and how to `REMOVE PAT` before re-issuing.)
+
+### 5. Populate dlt secrets (placeholders only — never commit real values)
+
+`dlt/.dlt/secrets.toml` — the Iceberg REST catalog config (the `[iceberg_catalog.iceberg_catalog_config]` keys), with the loader PAT supplied as `credential` (not `token`), plus `[destination.filesystem.credentials]` `profile_name = "my-aws-profile"` for dlt's S3 bookkeeping. Use `<HORIZON_LOAD_PAT>` as a placeholder — **do not paste a real token.**
+
+### 6. Run the loader
+
+```bash
+cd <repo>/dlt
+uv run python hello_world_pipeline.py
+```
+
+### 7. Verify the table from Snowflake
+
+```bash
+snow sql -q "SELECT * FROM ICE_RAW.LANDING.HELLO_WORLD" --role LOADER -c my-connection
+```
+
+You should see the two seeded rows — written by OSS dlt over the REST catalog, with no Snowflake warehouse ever started.
+
+### 8. Transform with dbt (read `ICE_RAW` → persist `ICE_TRANSFORMED`)
+
+```bash
+cd <repo>/dbt
+dbt system update                             # dbt Fusion >= preview.194 (bundles DuckDB 1.5.4)
+set -a; source ../.env; set +a
+source ../refresh_token.sh         # mints HORIZON_TOKEN (TRANSFORMER, ~60 min)
+dbt run                                        # Fusion: reads ICE_RAW, writes ICE_TRANSFORMED.STAGING.STG_HELLO_WORLD natively
+dbt show --inline "select * from {{ ref('stg_hello_world') }} order by created_at"
+```
+
+Fusion's DuckDB does it all natively — a stock `materialized: table` bound to the catalog writes
+the Snowflake-managed Iceberg table straight through the REST catalog (no pyiceberg, no parquet
+round-trip, no plugin). See [dbt/README.md](dbt/README.md) and
+[dbt/NOTES_horizon_write_path.md](dbt/NOTES_horizon_write_path.md) (incl. the stock dbt-core fallback).
+
+---
+
 ## Repo layout
 
 | Path | Purpose |
@@ -82,103 +170,6 @@ Engine → catalog edges carry **no Snowflake compute**: dlt/pyiceberg and dbt F
 
 - **`HORIZON_SVC`** is a single `TYPE = SERVICE` user that holds **both** roles. The active role is chosen **per session** by the OAuth scope at token-exchange (`session:role:LOADER` vs `session:role:TRANSFORMER`).
 - Because this account **enforces a role restriction on every PAT**, one unrestricted token cannot serve both roles — hence **two** role-restricted PATs on the one service user.
-
----
-
-## Status
-
-- ✅ **AWS infra** — bucket `my-org-iceberg`, IAM policy + role (`tf/aws/`).
-- ✅ **Snowflake external volume + databases** — `HORIZON_EXT_VOL`, `ICE_RAW`, `ICE_TRANSFORMED`, schema `LANDING` (`tf/snowflake/`).
-- ✅ **Access layer** — roles, grants, network policy, `HORIZON_SVC`, two role-restricted PATs (`sql/`).
-- ✅ **dlt hello_world VERIFIED end-to-end** — created `ICE_RAW.LANDING.HELLO_WORLD` (catalog `SNOWFLAKE`, kind `MANAGED`), data written via vended S3 creds, **queried back from Snowflake**.
-- ✅ **dbt transformer VERIFIED end-to-end on dbt FUSION, FULLY NATIVE** — `dbt run` (Fusion preview.194) reads `ICE_RAW.LANDING.HELLO_WORLD` and writes `ICE_TRANSFORMED.STAGING.STG_HELLO_WORLD` (Snowflake-managed Iceberg) with **DuckDB itself** via a stock `materialized: table` bound to the catalog. No pyiceberg, no parquet round-trip, no plugin, no SF compute. Idempotent; cross-engine verified (independent pyiceberg client reads back 8 rows / 1 snapshot).
-- ℹ️ **What unlocked it** — DuckDB ≥ 1.5.4 + the four [duckdb-iceberg#1017](https://github.com/duckdb/duckdb-iceberg/pull/1017) Horizon write-compat ATTACH options, exposed in catalogs.yml v2 by **dbt Fusion preview.194**. Earlier builds (≤ .193) couldn't commit (`transactions/commit` 400 / forbidden rollback DELETE). The same native write also works on stock **dbt-core + dbt-duckdb** as a fallback. Details + version history in [dbt/NOTES_horizon_write_path.md](dbt/NOTES_horizon_write_path.md).
-
----
-
-## Quickstart
-
-> Prereqs: `terraform`, the `snow` CLI (a connection, referenced below as `my-connection`), `uv`, an AWS profile (referenced as `my-aws-profile`, region `us-east-2`), and `ACCOUNTADMIN` on your Snowflake account. Set your org/account identifier (org `MYORG`, account `MYACCT` → host `myorg-myacct.snowflakecomputing.com`) in `tf/snowflake/terraform.tfvars` and `.env`.
-
-### 1. Provision AWS, then Snowflake
-
-```bash
-cd <repo>/tf/aws
-terraform init && terraform apply
-
-cd <repo>/tf/snowflake
-terraform init && terraform apply
-```
-
-> Trust-policy note: `tf/aws` first applies with an account-root placeholder principal; after the external volume exists, set `snowflake_iam_user_arn` + `snowflake_external_id` from `DESC EXTERNAL VOLUME HORIZON_EXT_VOL` in `tf/aws/terraform.tfvars` and re-apply to lock the IAM trust down to Snowflake's real principal.
-
-### 2. Create the access layer (roles, grants, network policy, service user)
-
-```bash
-cd <repo>
-snow sql -f sql/horizon_access.sql --role ACCOUNTADMIN -c my-connection
-```
-
-### 3. Issue the two role-restricted PATs
-
-Each token secret is returned **once** — capture it straight into the gitignored `.env` (never echo it to a log):
-
-```bash
-snow sql -q "ALTER USER HORIZON_SVC ADD PAT HORIZON_LOAD_PAT DAYS_TO_EXPIRY=7 \
-  ROLE_RESTRICTION='LOADER'      COMMENT='dlt external Iceberg REST loader'" \
-  --role ACCOUNTADMIN -c my-connection --format json
-
-snow sql -q "ALTER USER HORIZON_SVC ADD PAT HORIZON_PAT DAYS_TO_EXPIRY=7 \
-  ROLE_RESTRICTION='TRANSFORMER' COMMENT='dbt-duckdb external Iceberg REST'" \
-  --role ACCOUNTADMIN -c my-connection --format json
-```
-
-(See `sql/issue_pat.sql` for the canonical commands and how to `REMOVE PAT` before re-issuing.)
-
-### 4. Populate secrets (placeholders only — never commit real values)
-
-`.env`:
-
-```dotenv
-HORIZON_CATALOG_URI=https://myorg-myacct.snowflakecomputing.com/polaris/api/catalog
-HORIZON_READ_WAREHOUSE=ICE_RAW
-HORIZON_WRITE_WAREHOUSE=ICE_TRANSFORMED
-HORIZON_LOAD_PAT=<HORIZON_LOAD_PAT>
-HORIZON_PAT=<HORIZON_PAT>
-```
-
-`dlt/.dlt/secrets.toml` — the Iceberg REST catalog config (the `[iceberg_catalog.iceberg_catalog_config]` keys), with the loader PAT supplied as `credential` (not `token`), plus `[destination.filesystem.credentials]` `profile_name = "my-aws-profile"` for dlt's S3 bookkeeping. Use `<HORIZON_LOAD_PAT>` as a placeholder — **do not paste a real token.**
-
-### 5. Run the loader
-
-```bash
-cd <repo>/dlt
-uv run python hello_world_pipeline.py
-```
-
-### 6. Verify the table from Snowflake
-
-```bash
-snow sql -q "SELECT * FROM ICE_RAW.LANDING.HELLO_WORLD" --role LOADER -c my-connection
-```
-
-You should see the two seeded rows — written by OSS dlt over the REST catalog, with no Snowflake warehouse ever started.
-
-### 7. Transform with dbt (read `ICE_RAW` → persist `ICE_TRANSFORMED`)
-
-```bash
-cd <repo>/dbt
-dbt system update                             # dbt Fusion >= preview.194 (bundles DuckDB 1.5.4)
-set -a; source ../.env; set +a
-source ../refresh_token.sh         # mints HORIZON_TOKEN (TRANSFORMER, ~60 min)
-dbt run                                        # Fusion: reads ICE_RAW, writes ICE_TRANSFORMED.STAGING.STG_HELLO_WORLD natively
-dbt show --inline "select * from {{ ref('stg_hello_world') }} order by created_at"
-```
-
-Fusion's DuckDB does it all natively — a stock `materialized: table` bound to the catalog writes
-the Snowflake-managed Iceberg table straight through the REST catalog (no pyiceberg, no parquet
-round-trip, no plugin). See [dbt/README.md](dbt/README.md) and
-[dbt/NOTES_horizon_write_path.md](dbt/NOTES_horizon_write_path.md) (incl. the stock dbt-core fallback).
 
 ---
 
