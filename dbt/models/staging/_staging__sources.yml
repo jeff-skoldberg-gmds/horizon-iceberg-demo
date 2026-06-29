@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: landing
+    description: >
+      Raw Iceberg data landed by the dlt LOADER (hello_world_pipeline.py) into
+      ICE_RAW.LANDING via the Snowflake Horizon Iceberg REST catalog.
+    # ice_raw = the DuckDB alias for the attached ICE_RAW catalog (see profiles.yml).
+    database: ice_raw
+    schema: LANDING
+    tables:
+      - name: HELLO_WORLD
+        description: Two seeded rows ("hello"/"world") appended on each dlt run.
+        columns:
+          - name: ID
+            description: Per-row UUID (unique across appended runs).
+          - name: MESSAGE
+            description: The greeting token.
+          - name: CREATED_AT
+            description: UTC load timestamp.

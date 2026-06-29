@@ -1,0 +1,37 @@
+# dbt Fusion (dbt Core v2) catalogs.yml v2 — the "open data infra" front end.
+#
+# Each catalog is ATTACHed by Fusion's bundled DuckDB (>= 1.5.4) at session start. We
+# attach the Snowflake Horizon Iceberg REST catalog TWICE: ICE_RAW to read the dlt-landed
+# data, ICE_TRANSFORMED to persist the staging model. `warehouse` = the Snowflake DATABASE
+# name; `secret` names a DuckDB secret defined in profiles.yml (catalogs.yml never holds
+# credentials). env vars come from the gitignored root .env + the minted HORIZON_TOKEN.
+catalogs:
+  # Source: raw Iceberg landed by the dlt LOADER.
+  - name: ice_raw
+    type: iceberg_rest
+    table_format: iceberg
+    config:
+      duckdb:
+        endpoint: "{{ env_var('HORIZON_CATALOG_URI') }}"
+        warehouse: ICE_RAW
+        secret: horizon
+        attach_as: ice_raw
+        access_delegation_mode: VENDED_CREDENTIALS
+
+  # Target: where the TRANSFORMER persists models — NATIVE WRITE via the four
+  # duckdb-iceberg#1017 Horizon write-compat options (exposed by Fusion >= preview.194).
+  # See NOTES_horizon_write_path.md for what each one fixes.
+  - name: ice_transformed
+    type: iceberg_rest
+    table_format: iceberg
+    config:
+      duckdb:
+        endpoint: "{{ env_var('HORIZON_CATALOG_URI') }}"
+        warehouse: ICE_TRANSFORMED
+        secret: horizon
+        attach_as: ice_transformed
+        access_delegation_mode: VENDED_CREDENTIALS
+        stage_create_tables: false
+        disable_multi_table_commit: true
+        skip_create_table_metadata_updates: true
+        remove_files_on_delete: false

@@ -1,0 +1,33 @@
+name: horizon_iceberg
+version: "0.1.0"
+config-version: 2
+
+# dbt Fusion (dbt Core v2). Profile in dbt/profiles.yml. Catalogs (ice_raw read /
+# ice_transformed write) are attached via dbt/catalogs.yml. Fusion's DuckDB both reads
+# ICE_RAW and writes ICE_TRANSFORMED natively through the Horizon REST catalog — no plugin,
+# no parquet round-trip, no Snowflake compute.
+profile: horizon_iceberg
+
+# Opt into catalogs.yml v2 (the iceberg_rest catalog front end).
+flags:
+  use_catalogs_v2: true
+
+model-paths: ["models"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  horizon_iceberg:
+    staging:
+      # Native Iceberg table in the attached ICE_TRANSFORMED catalog. Fusion emits the
+      # write straight into Horizon (bound by catalog_name). Iceberg REST catalogs
+      # hold tables, not views — so this must be `table`, not `view`.
+      +materialized: table
+      +catalog_name: ice_transformed
+      +schema: STAGING
+    marts:
+      +catalog_name: ice_transformed
+      +materialized: table
+      +schema: MARTS

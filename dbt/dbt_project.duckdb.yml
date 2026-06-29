@@ -1,0 +1,32 @@
+name: horizon_iceberg
+version: "0.1.0"
+config-version: 2
+
+# dbt-duckdb (dbt-core) FALLBACK — works on stock dbt-core without Fusion. The Fusion path
+# (dbt_project.yml + catalogs.yml + profiles.yml) is the primary one; use this only if you
+# can't run Fusion. To activate: `cp dbt_project.duckdb.yml dbt_project.yml`, `cp
+# profiles.duckdb.yml profiles.yml`, and move catalogs.yml aside (dbt-core parses catalogs.yml
+# with an incompatible schema). One DuckDB engine attaches Horizon twice — ICE_RAW (read) and
+# ICE_TRANSFORMED (write) — and persists models natively via the custom iceberg_table
+# materialization. No plugin, no parquet round-trip, no Snowflake compute. See NOTES.
+profile: horizon_iceberg
+
+model-paths: ["models"]
+macro-paths: ["macros-duckdb"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  horizon_iceberg:
+    staging:
+      # Native Iceberg table in the attached ICE_TRANSFORMED catalog. The custom
+      # iceberg_table materialization (macros/) emits a single CREATE TABLE AS SELECT
+      # straight into Horizon (no temp-table swap). Schema comes from the profile (STAGING).
+      +materialized: iceberg_table
+      +database: ice_transformed
+    marts:
+      # Plain DuckDB views on top of the persisted Iceberg tables (local-only;
+      # the REST catalog can't hold a cross-engine DuckDB view).
+      +materialized: view

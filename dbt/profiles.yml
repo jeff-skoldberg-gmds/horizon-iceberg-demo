@@ -1,0 +1,48 @@
+# dbt Fusion (dbt Core v2) profile — TRANSFORMER half of the Horizon Iceberg demo.
+#
+# THE DREAM, ON FUSION: Fusion's bundled DuckDB (>= 1.5.4) both READS ICE_RAW and WRITES
+# ICE_TRANSFORMED natively through the Snowflake Horizon Iceberg REST catalog — no plugin,
+# no parquet round-trip, no Snowflake compute. The catalogs (ice_raw / ice_transformed)
+# are ATTACHed via catalogs.yml (with the four duckdb-iceberg#1017 write-compat options on
+# the write target). This profile only supplies the connection + the DuckDB secret those
+# catalogs reference (secret: horizon).
+#
+# Run:
+#   set -a; source ../.env; set +a
+#   source ../refresh_token.sh   # mints HORIZON_TOKEN (TRANSFORMER, ~60 min)
+#   dbt run
+horizon_iceberg:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', '/tmp/horizon_dbt.duckdb') }}"
+      threads: 1
+      schema: STAGING
+      extensions:
+        - iceberg
+      settings:
+        unsafe_enable_version_guessing: true
+      # Bearer token for both catalog attaches (DuckDB's own OAuth2 hits the wrong
+      # Snowflake endpoint; we pre-mint — see refresh_token.sh).
+      secrets:
+        - type: ICEBERG
+          name: horizon
+          token: "{{ env_var('HORIZON_TOKEN') }}"
+
+
+    prod:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', '/tmp/horizon_dbt.duckdb') }}"
+      threads: 1
+      schema: PROD
+      extensions:
+        - iceberg
+      settings:
+        unsafe_enable_version_guessing: true
+      # Bearer token for both catalog attaches (DuckDB's own OAuth2 hits the wrong
+      # Snowflake endpoint; we pre-mint — see refresh_token.sh).
+      secrets:
+        - type: ICEBERG
+          name: horizon
+          token: "{{ env_var('HORIZON_TOKEN') }}"

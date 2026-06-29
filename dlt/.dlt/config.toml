@@ -1,0 +1,32 @@
+# put your configuration values here
+
+[runtime]
+log_level="WARNING"  # the system log level of dlt
+
+# Case-SENSITIVE naming so identifiers are passed to the Horizon REST catalog
+# verbatim in UPPERCASE — matching the existing Snowflake schema ICE_RAW.LANDING
+# and producing an unquoted-friendly HELLO_WORLD table. The default snake_case
+# convention would lowercase them (-> 'landing'/'hello_world'), missing the schema.
+workspace_id = "32ee0ba6-0ed7-4398-85c7-fa271df5ae0f"
+organization_id = "f5ea4d2b-d85e-418f-b4c1-c427ad6af81e"
+[schema]
+naming = "sql_cs_v1"
+# use the dlthub_telemetry setting to enable/disable anonymous usage data reporting, see https://dlthub.com/docs/reference/telemetry
+
+# Object store backing the Iceberg tables. Must match the external volume
+# HORIZON_EXT_VOL (tf/snowflake) -> s3://<bucket_name>/<prefix>/. With Horizon
+# credential vending the actual table location + S3 auth come from the catalog,
+# so no AWS keys are needed here.
+#
+# bucket_url is account-specific, so it lives in the gitignored secrets.toml
+# (alongside the S3 credentials) instead of this committed file. Add to
+# .dlt/secrets.toml:
+#   [destination.filesystem]
+#   bucket_url = "s3://<your-bucket>/<prefix>"
+# You can also override at runtime: export DESTINATION__FILESYSTEM__BUCKET_URL=...
+[destination.filesystem]
+# S3 credentials + bucket_url for the filesystem destination live in secrets.toml
+# ([destination.filesystem], bucket_url + credentials.profile_name).
+
+[workspace.settings]
+name = "playground"

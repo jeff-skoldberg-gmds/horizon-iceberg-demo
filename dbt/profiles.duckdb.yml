@@ -1,0 +1,66 @@
+# dbt-duckdb (dbt-core) profile — TRANSFORMER half of the Horizon Iceberg demo.
+#
+# THE DREAM, NATIVELY: one DuckDB engine (>= 1.5.4) both READS ICE_RAW and WRITES
+# ICE_TRANSFORMED straight through the Snowflake Horizon Iceberg REST catalog — no
+# pyiceberg plugin, no parquet round-trip, no Snowflake compute. The model is a plain
+# `table` materialization whose database is the attached `ice_transformed` catalog, so
+# dbt emits CREATE TABLE AS SELECT directly into Horizon.
+#
+# This works because dbt-duckdb forwards `attach.options` verbatim to DuckDB's ATTACH,
+# so we can pass the duckdb-iceberg#1017 Horizon write-compat options that Snowflake
+# Horizon requires (see the ice_transformed attach below). dbt-Fusion will gain the same
+# native path once it ships those option names (see catalogs.fusion.yml / NOTES).
+#
+# Run:
+#   set -a; source ../.env; set +a
+#   source ../refresh_token.sh     # mints HORIZON_TOKEN (TRANSFORMER, ~60 min)
+#   uv run dbt run --profiles-dir .
+horizon_iceberg:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DBT_DUCKDB_PATH', '/tmp/horizon_dbt.duckdb') }}"
+      threads: 1
+      schema: STAGING
+      extensions:
+        - iceberg
+      settings:
+        unsafe_enable_version_guessing: true
+      # Pre-minted bearer (DuckDB's own OAuth2 hits the wrong Snowflake endpoint).
+      secrets:
+        - type: ICEBERG
+          name: horizon
+          token: "{{ env_var('HORIZON_TOKEN') }}"
+      attach:
+        # READ — raw Iceberg landed by the dlt LOADER.
+        - path: ICE_RAW
+          alias: ice_raw
+          options:
+            type: iceberg
+            secret: horizon
+            endpoint: "{{ env_var('HORIZON_CATALOG_URI') }}"
+        # WRITE — persist models here. The four duckdb-iceberg#1017 options make DuckDB
+        # commit in a way Snowflake Horizon accepts:
+        #   stage_create_tables false        -> CREATE TABLE direct (Horizon assigns the
+        #                                       location; a client-set location is rejected)
+        #   disable_multi_table_commit true  -> per-table updateTable, not the multi-table
+        #                                       transactions/commit endpoint Horizon lacks
+        #   skip_create_table_metadata_updates true -> no follow-up metadata update after a
+        #                                       non-staged create (requires stage_create_tables false)
+        #   remove_files_on_delete false     -> don't DELETE data files on rollback (vended
+        #                                       S3 creds are Put/Get/List only -> 403 otherwise)
+        - path: ICE_TRANSFORMED
+          alias: ice_transformed
+          options:
+            type: iceberg
+            secret: horizon
+            endpoint: "{{ env_var('HORIZON_CATALOG_URI') }}"
+            # NOTE: false-valued options are quoted strings on purpose. dbt-duckdb's
+            # Attachment.to_sql() DROPS boolean options whose value is False, so a plain
+            # `false` would silently vanish and Horizon would reject the write. The quoted
+            # string emits `STAGE_CREATE_TABLES 'false'`, which DuckDB parses as boolean false.
+            stage_create_tables: "false"
+            disable_multi_table_commit: true
+            skip_create_table_metadata_updates: true
+            remove_files_on_delete: "false"
