@@ -104,6 +104,8 @@ snow sql -q "ALTER USER HORIZON_SVC ADD PAT HORIZON_PAT DAYS_TO_EXPIRY=7 \
 
 (See `sql/issue_pat.sql` for the canonical commands and how to `REMOVE PAT` before re-issuing.)
 
+> **TODO:** Steps 2 (Snowflake Terraform) and 3 (`horizon_access.sql`) should be collapsed into a single Snowflake setup step — fold the `tf/snowflake` objects and grants into the SQL so there's one Snowflake setup action instead of two.
+
 ### 5. Populate dlt secrets (placeholders only — never commit real values)
 
 `dlt/.dlt/secrets.toml` — the Iceberg REST catalog config (the `[iceberg_catalog.iceberg_catalog_config]` keys), with the loader PAT supplied as `credential` (not `token`), plus `[destination.filesystem.credentials]` `profile_name = "my-aws-profile"` for dlt's S3 bookkeeping. Use `<HORIZON_LOAD_PAT>` as a placeholder — **do not paste a real token.**
@@ -183,6 +185,7 @@ round-trip, no plugin). See [dbt/README.md](dbt/README.md) and
 - **`create_table` location shim.** Snowflake-managed Iceberg rejects an explicit table location ("Creating a table with an explicit location is not allowed") — Horizon assigns it under `HORIZON_EXT_VOL`. The pipeline wraps `dlt.common.libs.pyiceberg.create_table` to drop `location` on first creation; this is the intended external-write flow.
 - **The filesystem destination still needs its own S3 creds.** Set `profile_name = "my-aws-profile"` under `[destination.filesystem.credentials]` for dlt's own bookkeeping — even though Horizon vends the temporary creds for the actual Iceberg data write.
 - **`warehouse` = the database name.** In the REST catalog config, `warehouse` is the Snowflake database (e.g. `ICE_RAW`), **not** a Snowflake virtual warehouse.
+- **DuckDB won't uppercase table names — Snowflake's engine does that, and we bypass it.** In normal Snowflake dbt, lowercase model filenames become UPPERCASE tables because Snowflake folds unquoted identifiers at parse time. Here the writes are executed by DuckDB, which is case-*preserving*, so a `stg_hello_world.sql` model lands as lowercase `stg_hello_world` in the catalog. No quoting config changes this (quoting ≠ case folding). The fix is to reproduce the folding dbt-side: [dbt/macros/generate_alias_name.sql](dbt/macros/generate_alias_name.sql) `| upper`s every alias, so you keep production-style lowercase filenames and still get uppercase identifiers. Symmetric with the existing `generate_schema_name` override.
 
 ---
 
