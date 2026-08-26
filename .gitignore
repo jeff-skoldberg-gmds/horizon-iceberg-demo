@@ -6,6 +6,9 @@
 crash.log
 crash.*.log
 
+# slides
+slides/*
+
 # Variable files may contain secrets / account-specific values
 *.tfvars
 *.tfvars.json

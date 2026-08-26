@@ -7,9 +7,7 @@ set -a
 . "$_root/.env"
 set +a
 
-# HORIZON_TOKEN is NOT in .env: it's a ~60-min OAuth bearer exchanged from
-# HORIZON_PAT (DuckDB/dbt need the vended token, not the raw PAT). Remind loudly
-# so `dbt build` doesn't fail later with a cryptic "env var HORIZON_TOKEN not found".
+# HORIZON_TOKEN isn't in .env -- it's a short-lived OAuth token, minted separately.
 if [ -z "${HORIZON_TOKEN:-}" ]; then
   echo "note: HORIZON_TOKEN not set (dbt/DuckDB need it). Mint it with:" >&2
   echo "      source $_root/refresh_token.sh" >&2
