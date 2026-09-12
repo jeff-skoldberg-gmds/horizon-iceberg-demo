@@ -1,4 +1,27 @@
+[generated with claude]
+
 # SIGSEGV: MotherDuck extension + Iceberg REST catalog vended-credential scan
+
+## Status (updated 2026-08-26): still open on latest versions
+
+Re-tested end to end on current-as-of-today releases: DuckDB 1.5.5, motherduck
+ext `v1.5.5-2026-08-230`, iceberg ext `45163a28`. Two changes from the original
+report below, neither of which resolves the issue:
+
+- MotherDuck now loads fine on DuckDB 1.5.5 (it used to refuse above 1.5.3 —
+  see the version matrix).
+- The crash itself no longer surfaces as a clean SIGSEGV. glibc now catches
+  heap corruption a step earlier: `free(): invalid pointer` on one run,
+  `free(): invalid size` on an immediate re-run of the identical script (exit
+  134 both times). A different abort message on an identical re-run points to
+  memory corruption/undefined behavior, not a new, separate, deterministic
+  bug — consistent with the original "likely cause" theory below.
+
+`SHOW ALL TABLES` with `md:` attached still lists the table fine, so it's
+visible/browsable in MotherDuck — only the actual data scan over vended
+credentials crashes. The documented workaround (skip `md:`, read Iceberg in
+one process, `COPY` to Parquet, load that into MotherDuck from a second
+process) was re-confirmed working unaffected on these same versions.
 
 ## Summary
 
@@ -100,6 +123,7 @@ the S3 read itself.
 | 1.5.2 | ✅ | 💥 SIGSEGV |
 | 1.5.3 | ✅ | 💥 SIGSEGV |
 | 1.5.4 | ❌ refuses ("latest supported is v1.5.3") | n/a |
+| 1.5.5 | ✅ (`v1.5.5-2026-08-230`) | 💥 `free(): invalid pointer` / `free(): invalid size` (SIGABRT, exit 134) — see Status above |
 
 ## Likely cause (speculative)
 

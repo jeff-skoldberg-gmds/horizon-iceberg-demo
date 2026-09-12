@@ -24,6 +24,7 @@ select count(*) from SNOW_HORIZON.LANDING.HELLO_WORLD;
 create or replace table local_hello_world as select * from SNOW_HORIZON.LANDING.HELLO_WORLD limit 2_000_000;
 
 -- time to select 5000 rows: 1.59s, 0.86s, 1.53s, 2.01s, 1.17s (avg ~1.43s)
+SELECT * FROM SNOW_HORIZON.LANDING.HELLO_WORLD limit 5_000;
 SELECT * FROM SNOW_HORIZON.LANDING.HELLO_WORLD limit 20_000_000;
 -- time to select ALL the rows (79,410): 0.43s, 0.42s, 0.42s, 0.42s, 0.42s (avg ~0.42s)
 select * from local_hello_world limit 20_000_000;
