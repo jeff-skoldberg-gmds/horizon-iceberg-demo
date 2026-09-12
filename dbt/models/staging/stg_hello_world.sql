@@ -12,3 +12,4 @@ select
     message     as message,
     created_at  as created_at
 from source
+limit 20_000
